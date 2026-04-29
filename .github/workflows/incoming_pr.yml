@@ -1,6 +1,8 @@
-name: Incoming PR
-run-name: PR opened by ${{ github.actor }}
+name: Dev CI/CD
+run-name: Dev pipeline triggered by ${{ github.actor }}
 on:
+  push:
+    branches: [dev]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
@@ -11,7 +13,7 @@ permissions:
 
 jobs:
   run-snowflake-test-dbt-job:
-    name: "Run on Incoming PR"
+    name: "Test and Deploy to Dev"
     runs-on: ubuntu-latest
     environment: prod # Must match the OIDC subject's environment
     env:
@@ -22,30 +24,28 @@ jobs:
       SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
 
     steps:
-      # Check out repository code
-      # Gets the latest code from the incoming pull request
       - name: Check out repository code
         uses: actions/checkout@v4
 
       - name: Install Snowflake CLI
         uses: snowflakedb/snowflake-cli-action@v2.0
-        with: # Ensures Snowflake CLI will search for OIDC users matching this subject
+        with:
           use-oidc: true
 
       - name: Check Snowflake CLI Version
         run: snow --version
 
-      # The -x is shorthand for --temporary-connection
       - run: snow connection test -x
 
-      # The --force setting creates the object or updates it if it already exists
-      # You can remove the "--source" flag if your dbt_project.yml is at root of your repo
-      - name: Create a new tester dbt project object in ${{ vars.SNOWFLAKE_DATABASE }}.${{ vars.SNOWFLAKE_SCHEMA }}
-        run: snow dbt deploy tester_tasty_bytes_dbt_project_object_gh_action --source ./tasty_bytes --dbt-version 1.10.15 --force -x
+      - name: Deploy dbt project to dev environment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: snow dbt deploy tasty_bytes_dbt_dev --source ./tasty_bytes --dbt-version 1.10.15 --force -x
 
-      - name: List all of the snowflake dbt project objects in your account
+      - name: List all dbt project objects
         run: snow dbt list -x
 
-      # Builds all models and runs tests in DAG order, failing early if any upstream test breaks
-      - name: Build and test dbt project in ${{ vars.SNOWFLAKE_DATABASE }}.${{ vars.SNOWFLAKE_SCHEMA }}
-        run: snow dbt execute -x tester_tasty_bytes_dbt_project_object_gh_action build --target dev
+      - name: Build models in dev
+        run: snow dbt execute -x tasty_bytes_dbt_dev run --target dev
+
+      - name: Run source and singular tests
+        run: snow dbt execute -x tasty_bytes_dbt_dev test --target dev
